@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type Server struct {
+type FakeBundleEndpointProvider struct {
 	tb         testing.TB
 	wg         sync.WaitGroup
 	addr       net.Addr
@@ -32,60 +32,60 @@ type Server struct {
 	bundles []*spiffebundle.Bundle
 }
 
-type ServerOption interface {
-	apply(*Server)
+type FakeBundleEndpointProviderOption interface {
+	apply(*FakeBundleEndpointProvider)
 }
 
-func New(tb testing.TB, option ...ServerOption) *Server {
+func New(tb testing.TB, option ...FakeBundleEndpointProviderOption) *FakeBundleEndpointProvider {
 	rootCAs, cert := test.CreateWebCredentials(tb)
 	tlscfg := &tls.Config{
 		Certificates: []tls.Certificate{*cert},
 		MinVersion:   tls.VersionTLS12,
 	}
 
-	s := &Server{
+	fbep := &FakeBundleEndpointProvider{
 		tb:      tb,
 		rootCAs: rootCAs,
 		tlscfg:  tlscfg,
 	}
 
 	for _, opt := range option {
-		opt.apply(s)
+		opt.apply(fbep)
 	}
 
 	sm := http.NewServeMux()
-	sm.HandleFunc("/test-bundle", s.testbundle)
-	s.httpServer = &http.Server{
+	sm.HandleFunc("/test-bundle", fbep.testbundle)
+	fbep.httpServer = &http.Server{
 		Handler:           sm,
-		TLSConfig:         s.tlscfg,
+		TLSConfig:         fbep.tlscfg,
 		ReadHeaderTimeout: time.Second * 10,
 	}
-	err := s.start()
+	err := fbep.start()
 	if err != nil {
 		tb.Fatalf("Failed to start: %v", err)
 	}
-	return s
+	return fbep
 }
 
-func (s *Server) Shutdown() {
+func (s *FakeBundleEndpointProvider) Shutdown() {
 	err := s.httpServer.Shutdown(context.Background())
 	assert.NoError(s.tb, err)
 	s.wg.Wait()
 }
 
-func (s *Server) Addr() string {
+func (s *FakeBundleEndpointProvider) Addr() string {
 	return s.addr.String()
 }
 
-func (s *Server) FetchBundleURL() string {
+func (s *FakeBundleEndpointProvider) FetchBundleURL() string {
 	return fmt.Sprintf("https://%s/test-bundle", s.Addr())
 }
 
-func (s *Server) RootCAs() *x509.CertPool {
+func (s *FakeBundleEndpointProvider) RootCAs() *x509.CertPool {
 	return s.rootCAs
 }
 
-func (s *Server) start() error {
+func (s *FakeBundleEndpointProvider) start() error {
 	ln, err := net.Listen("tcp", "127.0.0.1:")
 	if err != nil {
 		return err
@@ -103,7 +103,7 @@ func (s *Server) start() error {
 	return nil
 }
 
-func (s *Server) testbundle(w http.ResponseWriter, r *http.Request) {
+func (s *FakeBundleEndpointProvider) testbundle(w http.ResponseWriter, r *http.Request) {
 	if len(s.bundles) == 0 {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -118,24 +118,24 @@ func (s *Server) testbundle(w http.ResponseWriter, r *http.Request) {
 	assert.Equal(s.tb, len(bb), b)
 }
 
-type serverOption func(*Server)
+type fakeOption func(*FakeBundleEndpointProvider)
 
 // WithTestBundles sets the bundles that are returned by the Bundle Endpoint. You can
 // specify several bundles, which are going to be returned one at a time each time
 // a bundle is GET by a client.
-func WithTestBundles(bundles ...*spiffebundle.Bundle) ServerOption {
-	return serverOption(func(s *Server) {
+func WithTestBundles(bundles ...*spiffebundle.Bundle) FakeBundleEndpointProviderOption {
+	return fakeOption(func(s *FakeBundleEndpointProvider) {
 		s.bundles = bundles
 	})
 }
 
-func WithSPIFFEAuth(bundle *spiffebundle.Bundle, svid *x509svid.SVID) ServerOption {
-	return serverOption(func(s *Server) {
+func WithSPIFFEAuth(bundle *spiffebundle.Bundle, svid *x509svid.SVID) FakeBundleEndpointProviderOption {
+	return fakeOption(func(s *FakeBundleEndpointProvider) {
 		s.rootCAs = x509util.NewCertPool(bundle.X509Authorities())
 		s.tlscfg = tlsconfig.TLSServerConfig(svid)
 	})
 }
 
-func (so serverOption) apply(s *Server) {
-	so(s)
+func (fo fakeOption) apply(s *FakeBundleEndpointProvider) {
+	fo(s)
 }
